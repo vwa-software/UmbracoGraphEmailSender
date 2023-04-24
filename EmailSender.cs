@@ -78,7 +78,7 @@ namespace VWA.Utils
         public bool CanSendRequiredEmail() => _globalSettings.IsSmtpServerConfigured
                                               || _globalSettings.IsPickupDirectoryLocationConfigured
                                               || _notificationHandlerRegistered
-                                              || _configuration.GetSection("Umbraco")?.GetSection("CMS")?.GetSection("Global")?.GetSection("Graph") != null;
+                                               || _configuration.GetSection("Umbraco")?.GetSection("CMS")?.GetSection("Global")?.GetSection("Graph")?.GetValue<string>("TenantId") != null;
 
         private async Task SendAsyncInternal(EmailMessage message, string emailType, bool enableNotification)
         {
@@ -100,7 +100,7 @@ namespace VWA.Utils
 
             var section = _configuration.GetSection("Umbraco")?.GetSection("CMS")?.GetSection("Global")?.GetSection("Graph");
 
-            if (section == null)
+            if (section == null || string.IsNullOrEmpty(section.GetValue<string>("TenantId")))
             {
                 await SendAsyncInternalSmtp(message);
             }
@@ -125,46 +125,17 @@ namespace VWA.Utils
                 .WithAuthority(AzureCloudInstance.AzurePublic, tenantId)
                 .Build();
 
-            bool useDelegate = false;
+            
+            // Define your credentials based on the created app and user details.
+            // Specify the options. In most cases we're running the Azure Public Cloud.
+            var credentials = new ClientSecretCredential(
+                tenantId,
+                clientId,
+                clientSecret,
+                new TokenCredentialOptions { AuthorityHost = AzureAuthorityHosts.AzurePublicCloud });
 
-            if (!useDelegate)
-            {
-                // Define your credentials based on the created app and user details.
-                // Specify the options. In most cases we're running the Azure Public Cloud.
-                var credentials = new ClientSecretCredential(
-                    tenantId,
-                    clientId,
-                    clientSecret,
-                    new TokenCredentialOptions { AuthorityHost = AzureAuthorityHosts.AzurePublicCloud });
-
-                // Initialize Microsoft Graph client
-                graphClient = new GraphServiceClient(credentials);
-            }
-            else
-            {
-                var scopes = new[] { "User.Read", "Mail.Send" };
-
-                // Callback function that receives the user prompt
-                // Prompt contains the generated device code that you must
-                // enter during the auth process in the browser
-                Func<DeviceCodeInfo, CancellationToken, Task> callback = (code, cancellation) =>
-                {
-                    Console.WriteLine(code.Message);
-                    return Task.FromResult(0);
-                };
-
-                // using Azure.Identity;
-                var options = new TokenCredentialOptions
-                {
-                    AuthorityHost = AzureAuthorityHosts.AzurePublicCloud
-                };
-
-                // https://learn.microsoft.com/dotnet/api/azure.identity.devicecodecredential
-                var deviceCodeCredential = new DeviceCodeCredential(
-                    callback, tenantId, clientId, options);
-
-                graphClient = new GraphServiceClient(deviceCodeCredential, scopes);
-            }
+            // Initialize Microsoft Graph client
+            graphClient = new GraphServiceClient(credentials);
 
             // Convert Umbraco message to Microsoft Graph Message
             var graphMessage = new Message
@@ -201,7 +172,8 @@ namespace VWA.Utils
             {
                 graphMessage.ReplyTo = message.ReplyTo.Select(a => CreateRecipient(a)).ToList();
             }
-
+            
+            graphMessage.Attachments = new List<Microsoft.Graph.Models.Attachment>();
             foreach (EmailMessageAttachment attachment in message.Attachments!)
             {
                 byte[] bytes;
